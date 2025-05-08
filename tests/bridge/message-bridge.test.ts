@@ -24,11 +24,11 @@ describe('MessageBridge', () => {
     it('should send and receive a promise-based message (child -> parent)', async () => {
         const iframeId = 'test-iframe';
 
-        MessageBridge.parent().listenFor('ping').subscribe(({ request, source }) => {
-            MessageBridge.parent().respond(request.uid, { pong: true });
+        MessageBridge.toParent().listenFor('ping').subscribe(({ request, source }) => {
+            MessageBridge.toParent().respond(request.uid, { pong: true });
         });
 
-        const result = await MessageBridge.child(iframeId).sendRequest('ping');
+        const result = await MessageBridge.toChild(iframeId).sendRequest('ping');
         expect(result).toEqual({ pong: true });
     });
 
@@ -44,11 +44,11 @@ describe('MessageBridge', () => {
 
         const action = 'test-request';
 
-        MessageBridge.parent().listenFor(action).subscribe(({ request, source }) => {
-            MessageBridge.parent().respond(request.uid, { ok: true });
+        MessageBridge.toParent().listenFor(action).subscribe(({ request, source }) => {
+            MessageBridge.toParent().respond(request.uid, { ok: true });
         });
 
-        const result = await MessageBridge.child('fake-id').sendRequest(action);
+        const result = await MessageBridge.toChild('fake-id').sendRequest(action);
         expect(result).toEqual({ ok: true });
     });
 
@@ -58,7 +58,7 @@ describe('MessageBridge', () => {
 
         const received: number[] = [];
 
-        const sub = MessageBridge.child(iframeId).sendObservable<number>('tick').subscribe({
+        const sub = MessageBridge.toChild(iframeId).sendObservable<number>('tick').subscribe({
             next: (val) => received.push(val),
             complete: () => {
                 expect(received).toEqual(ticks);
@@ -90,10 +90,10 @@ describe('MessageBridge', () => {
         const action = 'letters';
         const fakeUid = 'abc123';
 
-        MessageBridge.parent().listenFor(action).subscribe(({ request }) => {
+        MessageBridge.toParent().listenFor(action).subscribe(({ request }) => {
             const interval = setInterval(() => {
                 const payload = ticks[index];
-                MessageBridge.parent().respond(request.uid, payload, index === ticks.length - 1);
+                MessageBridge.toParent().respond(request.uid, payload, index === ticks.length - 1);
                 index++;
                 if (index >= ticks.length) clearInterval(interval);
             }, 10);
@@ -101,7 +101,7 @@ describe('MessageBridge', () => {
 
         const values: string[] = [];
 
-        const sub = MessageBridge.child('fake-iframe').sendObservable<string>(action).subscribe({
+        const sub = MessageBridge.toChild('fake-iframe').sendObservable<string>(action).subscribe({
             next: (val) => values.push(val),
             complete: () => {},
         });

@@ -1,13 +1,12 @@
 import {MessageBridge} from "../src";
-console.log('playground/parent.ts');
 
-MessageBridge.init('parent-frame');
+MessageBridge.init({debug: true});
 
-// Setup
 const iframe = document.getElementById('child-frame') as HTMLIFrameElement;
 
+
 const sendTick = () => {
-    MessageBridge.child(iframe).sendObservable('tick', {
+    MessageBridge.toChild(iframe).sendObservable('tick', {
         time: new Date().toISOString(),
     }).subscribe({
         next: (res) => {
@@ -19,10 +18,18 @@ const sendTick = () => {
     });
 }
 
-setInterval(() => {
-    console.log('[parent] Tick triggered');
-    sendTick()
-}, 20000);
 
-console.log('[parent] Tick initialized');
-sendTick()
+MessageBridge.connect(iframe).then(() => {
+    console.log('[parent] Iframe connected');
+    MessageBridge.toChild(iframe).sendRequest('ping').then((res) => {
+        console.log('[parent] Ping response from iframe:', res);
+    });
+
+    sendTick();
+
+    setInterval(() => {
+        console.log('[parent] Tick triggered');
+        sendTick()
+    }, 20000);
+
+})

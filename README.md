@@ -48,14 +48,14 @@ MessageBridge.init();
 ```ts
 const iframe = document.getElementById('child-frame') as HTMLIFrameElement;
 
-const result = await MessageBridge.child(iframe).sendRequest('getTime');
+const result = await MessageBridge.toChild(iframe).sendRequest('getTime');
 console.log('Time from iframe:', result);
 ```
 
 #### Subscribe to observable responses
 
 ```ts
-MessageBridge.child(iframe).sendObservable('height').subscribe({
+MessageBridge.toChild(iframe).sendObservable('height').subscribe({
   next: (data) => console.log('Height from iframe:', data),
   complete: () => console.log('Completed'),
 });
@@ -64,19 +64,24 @@ MessageBridge.child(iframe).sendObservable('height').subscribe({
 #### Listen for requests *from* iframe
 
 ```ts
-MessageBridge.parent().listenFor('ping').subscribe(({ request }) => {
-  MessageBridge.parent().respond(request.uid, { pong: true });
+MessageBridge.toChild(iframe).listenFor('ping').subscribe(({ request }) => {
+  // opt. send a response back to the iframe
+  MessageBridge.toChild(iframe).respond(request.uid, { pong: true });
 });
 ```
 
 #### Broadcast to all registered iframes
 
 ```ts
-MessageBridge.broadcastRequest('refreshData', { force: true }).then(console.log);
+import {MessageBridge} from "./message-bride";
 
-MessageBridge.broadcastObservable('tickStream').subscribe(({ iframeId, value }) => {
-  console.log(`Tick from ${iframeId}:`, value);
+MessageBridge.connect([iframe1, iframe2]).then(() => {
+    MessageBridge.broadcastRequest('refreshData', {force: true}).then(console.log);
+    MessageBridge.broadcastObservable('tickStream').subscribe(({iframeId, value}) => {
+        console.log(`Tick from ${iframeId}:`, value);
+    });
 });
+
 ```
 
 ---
@@ -86,22 +91,16 @@ MessageBridge.broadcastObservable('tickStream').subscribe(({ iframeId, value }) 
 #### Send request to parent
 
 ```ts
-const result = await MessageBridge.parent().sendRequest('getConfig');
+const result = await MessageBridge.toParent().sendRequest('getConfig');
 console.log('Parent config:', result);
 ```
 
-#### Send observable stream
+#### listen to observable stream
 
 ```ts
-const ticks = [1, 2, 3];
-let i = 0;
-
-MessageBridge.parent().listenFor('startTick').subscribe(({ request }) => {
-  const interval = setInterval(() => {
-    MessageBridge.parent().respond(request.uid, ticks[i], i === ticks.length - 1);
-    i++;
-    if (i >= ticks.length) clearInterval(interval);
-  }, 1000);
+MessageBridge.toParent().listenFor(event).subscribe(({ event }) => {
+    // opt. send a response back to the parent
+    MessageBridge.toParent().respond(request.uid, { ... });
 });
 ```
 

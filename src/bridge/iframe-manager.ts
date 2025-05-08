@@ -2,80 +2,57 @@ export class IframeManager {
     private static iframes = new Map<string, HTMLIFrameElement>();
     private static readyPromises = new Map<string, Promise<void>>();
 
-    static connect(iframeOrId: string | HTMLIFrameElement, timeout = 5000): Promise<void> {
-        const iframeId =
-            typeof iframeOrId === 'string' ? iframeOrId : iframeOrId.id;
-
-        console.log('connecting to iframe:', iframeId);
+    static connect(iframeOrId: string | HTMLIFrameElement, timeout = 10000): Promise<void> {
+        const iframeId = typeof iframeOrId === 'string' ? iframeOrId : iframeOrId.id;
 
         const existingReady = this.readyPromises.get(iframeId);
         if (existingReady) {
-            console.log('already connected to iframe:', iframeId);
-            return existingReady
+            return existingReady;
         }
 
-        const start = Date.now();
-
         const readyPromise = new Promise<void>((resolve, reject) => {
-            const tryRegister = () => {
-                const iframe =
-                    typeof iframeOrId === 'string'
-                        ? document.getElementById(iframeOrId) as HTMLIFrameElement | null
-                        : iframeOrId;
+            const iframe = typeof iframeOrId === 'string'
+                ? document.getElementById(iframeOrId) as HTMLIFrameElement | null
+                : iframeOrId;
 
-                if (!iframe) {
-                    if (Date.now() - start >= timeout) {
-                        return reject(new Error(`Iframe with id '${iframeId}' not found after ${timeout}ms`));
+            if (!iframe) {
+                return reject(new Error(`Iframe '${iframeId}' not found`));
+            }
+
+            const contentWindow = () => iframe?.contentWindow;
+
+            const onMessage = (event: MessageEvent) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'handshake' && msg.iframeId === iframeId) {
+                        if (retryInterval) clearInterval(retryInterval);
+                        if (timer) clearTimeout(timer);
+                        window.removeEventListener('message', onMessage);
+                        this.iframes.set(iframeId, iframe!);
+                        this.readyPromises.set(iframeId, Promise.resolve());
+                        resolve();
                     }
-                    return setTimeout(tryRegister, 100);
+                } catch {
+                    // ignore
                 }
-
-                const contentWindow = iframe.contentWindow;
-                if (!contentWindow) {
-                    if (Date.now() - start >= timeout) {
-                        return reject(new Error(`Iframe '${iframeId}' did not become ready after ${timeout}ms`));
-                    }
-                    return setTimeout(tryRegister, 100);
-                } else {
-                    console.log(`[iframe] Found iframe '${iframeId}' with contentWindow`);
-                }
-
-                const onMessage = (event: MessageEvent) => {
-                    try {
-                        const msg = JSON.parse(event.data);
-                        console.log('[iframe] Received message:', msg);
-                        if (msg.type === 'handshake' && msg.iframeId === iframeId) {
-                            clearTimeout(timer);
-                            console.log(`[iframe] Handshake successful for iframe '${iframeId}'`);
-                            window.removeEventListener('message', onMessage);
-                            this.iframes.set(iframeId, iframe);
-                            this.readyPromises.set(iframeId, Promise.resolve());
-                            resolve();
-                        }
-                    } catch {
-                        // ignore
-                    }
-                };
-
-                window.addEventListener('message', onMessage);
-
-                const timer = setTimeout(() => {
-                    window.removeEventListener('message', onMessage);
-                    reject(new Error(`Handshake timeout for iframe '${iframeId}'`));
-                }, timeout - (Date.now() - start));
-
-                console.log('posting handshake request to iframe:', iframeId);
-
-                // Send handshake request
-                contentWindow.postMessage(
-                    JSON.stringify({ type: 'handshake-request' }),
-                    '*'
-                );
             };
 
-            tryRegister();
+            window.addEventListener('message', onMessage);
+
+            const retryInterval = setInterval(() => {
+                if (contentWindow()) {
+                    contentWindow()?.postMessage(JSON.stringify({ type: 'handshake-request' }), '*');
+                }
+            }, 200);
+
+            const timer = setTimeout(() => {
+                clearInterval(retryInterval);
+                window.removeEventListener('message', onMessage);
+                reject(new Error(`Handshake timeout for iframe '${iframeId}'`));
+            }, timeout);
         });
 
+        this.readyPromises.set(iframeId, readyPromise);
         return readyPromise;
     }
 
