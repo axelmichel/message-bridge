@@ -147,6 +147,68 @@ export class MessageBridge {
         };
     }
 
+    static broadcastRequest<T = any>(action: string, payload?: any, timeout = 10000): Promise<Record<string, T>> {
+        const uid = Math.random().toString(36).slice(2);
+        const message: MessageRequest = { uid, type: 'request', mode: 'promise', action, payload };
+
+        const iframeIds = IframeManager.getAllIframeIds();
+        const responses: Record<string, T> = {};
+        MessageBridge.log('Parent broadcastRequest', JSON.stringify(message));
+        return new Promise((resolve, reject) => {
+            let remaining = iframeIds.length;
+            const timer = setTimeout(() => {
+                MessageBridge.responseListeners.delete(uid);
+                reject(new Error(`Timeout after ${timeout}ms, responses: ${JSON.stringify(responses)}`));
+            }, timeout);
+
+            iframeIds.forEach((id) => {
+                const localUid = `${uid}_${id}`;
+                const localMessage = { ...message, uid: localUid };
+
+                MessageBridge.responseListeners.set(localUid, (data) => {
+                    responses[id] = data;
+                    remaining -= 1;
+
+                    if (remaining === 0) {
+                        clearTimeout(timer);
+                        resolve(responses);
+                    }
+                });
+
+                IframeManager.postMessage(id, JSON.stringify(localMessage));
+            });
+        });
+    }
+
+    static broadcastObservable<T = any>(action: string, payload?: any): Observable<{ iframeId: string; value: T }> {
+        const uid = Math.random().toString(36).slice(2);
+        const message: MessageRequest = { uid, type: 'request', mode: 'observable', action, payload };
+        const iframeIds = IframeManager.getAllIframeIds();
+        MessageBridge.log('Parent broadcastObservable', JSON.stringify(message));
+        return new Observable((observer) => {
+            iframeIds.forEach((id) => {
+                const localUid = `${uid}_${id}`;
+                const localMessage = { ...message, uid: localUid };
+
+                MessageBridge.responseListeners.set(localUid, (data) => {
+                    if (data?.done) {
+                        MessageBridge.responseListeners.delete(localUid);
+                    } else {
+                        observer.next({ iframeId: id, value: data });
+                    }
+                });
+
+                IframeManager.postMessage(id, JSON.stringify(localMessage));
+            });
+
+            return () => {
+                iframeIds.forEach((id) => {
+                    MessageBridge.responseListeners.delete(`${uid}_${id}`);
+                });
+            };
+        });
+    }
+
     static parent() {
         return {
             sendRequest<T = unknown>(action: string, payload?: any, timeout = 10000): Promise<T> {
@@ -192,68 +254,6 @@ export class MessageBridge {
 
                     return () => {
                         MessageBridge.responseListeners.delete(uid);
-                    };
-                });
-            },
-
-            broadcastRequest<T = any>(action: string, payload?: any, timeout = 10000): Promise<Record<string, T>> {
-                const uid = Math.random().toString(36).slice(2);
-                const message: MessageRequest = { uid, type: 'request', mode: 'promise', action, payload };
-
-                const iframeIds = IframeManager.getAllIframeIds();
-                const responses: Record<string, T> = {};
-                MessageBridge.log('Parent broadcastRequest', JSON.stringify(message));
-                return new Promise((resolve, reject) => {
-                    let remaining = iframeIds.length;
-                    const timer = setTimeout(() => {
-                        MessageBridge.responseListeners.delete(uid);
-                        reject(new Error(`Timeout after ${timeout}ms, responses: ${JSON.stringify(responses)}`));
-                    }, timeout);
-
-                    iframeIds.forEach((id) => {
-                        const localUid = `${uid}_${id}`;
-                        const localMessage = { ...message, uid: localUid };
-
-                        MessageBridge.responseListeners.set(localUid, (data) => {
-                            responses[id] = data;
-                            remaining -= 1;
-
-                            if (remaining === 0) {
-                                clearTimeout(timer);
-                                resolve(responses);
-                            }
-                        });
-
-                        IframeManager.postMessage(id, JSON.stringify(localMessage));
-                    });
-                });
-            },
-
-            broadcastObservable<T = any>(action: string, payload?: any): Observable<{ iframeId: string; value: T }> {
-                const uid = Math.random().toString(36).slice(2);
-                const message: MessageRequest = { uid, type: 'request', mode: 'observable', action, payload };
-                const iframeIds = IframeManager.getAllIframeIds();
-                MessageBridge.log('Parent broadcastObservable', JSON.stringify(message));
-                return new Observable((observer) => {
-                    iframeIds.forEach((id) => {
-                        const localUid = `${uid}_${id}`;
-                        const localMessage = { ...message, uid: localUid };
-
-                        MessageBridge.responseListeners.set(localUid, (data) => {
-                            if (data?.done) {
-                                MessageBridge.responseListeners.delete(localUid);
-                            } else {
-                                observer.next({ iframeId: id, value: data });
-                            }
-                        });
-
-                        IframeManager.postMessage(id, JSON.stringify(localMessage));
-                    });
-
-                    return () => {
-                        iframeIds.forEach((id) => {
-                            MessageBridge.responseListeners.delete(`${uid}_${id}`);
-                        });
                     };
                 });
             },
