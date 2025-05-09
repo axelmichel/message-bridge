@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
-import { MessageBridge, IframeManager } from '../../src';
+import { MessageBridge } from '../../src';
+import { IframeManager } from '../../src/bridge/iframe-manager';
 
 const mockWindowMap = new Map<string, Window>();
 

@@ -1,6 +1,7 @@
 {
   "scripts": {
     "build": "tsc",
+    "build:lib": "vite build --config vite.lib.config.ts",
     "dev:playground": "vite",
     "start": "node dist/index.js",
     "test": "vitest"
@@ -19,6 +20,7 @@
     "@types/jsdom": "^21.1.7",
     "jsdom": "^26.1.0",
     "serve": "^14.2.4",
+    "terser": "^5.39.0",
     "typescript": "^5.8.3",
     "vite": "^6.3.5",
     "vitest": "^3.1.3"
