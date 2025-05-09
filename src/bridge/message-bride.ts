@@ -1,10 +1,11 @@
 import { Observable, Subject } from 'rxjs';
 import { IframeManager } from './iframe-manager';
+import { WindowManager } from "./window-manager";
 
 type MessageBridgeConfig = {
     bridgeIdentifier?: string;
     debug?: boolean;
-}
+};
 
 type MessageRequest = {
     uid: string;
@@ -32,10 +33,9 @@ export class MessageBridge {
         (window as any).__messageBridgeInitialized = true;
 
         const { bridgeIdentifier = 'message-bridge', debug = false } = config;
-        const isChild = window.location !== top?.location;
 
-        MessageBridge.identifier = window.location === top?.location ?
-            `parent-${bridgeIdentifier}` : `child-${bridgeIdentifier}`;
+        MessageBridge.identifier = window.location === top?.location
+            ? `parent-${bridgeIdentifier}` : `child-${bridgeIdentifier}`;
         MessageBridge.debug = debug;
 
         window.addEventListener('message', (event) => {
@@ -43,7 +43,8 @@ export class MessageBridge {
 
             try {
                 const message = JSON.parse(event.data);
-                MessageBridge.log('Message Event', 'Received message', message);
+                MessageBridge.log('Received message', message);
+
                 if (message.type === 'response' && MessageBridge.responseListeners.has(message.uid)) {
                     const listener = MessageBridge.responseListeners.get(message.uid);
                     listener?.(message.payload);
@@ -58,39 +59,57 @@ export class MessageBridge {
                     sourceWindow.postMessage(JSON.stringify({ type: 'handshake', iframeId }), '*');
                 }
             } catch {
-                MessageBridge.log('Message Event', 'Invalid JSON', event.data);
+                MessageBridge.log('Invalid JSON', event.data);
             }
         });
-
-        if (isChild) {
-            const iframeId = (window as any).name || 'unknown-iframe';
-            const sourceWindow = window.parent;
-            sourceWindow.postMessage(JSON.stringify({ type: 'handshake', iframeId }), '*');
-        }
     }
 
-    static async connect(iframeOrIds: string | HTMLIFrameElement | (string | HTMLIFrameElement)[], timeout = 10000): Promise<void> {
-        const targets = Array.isArray(iframeOrIds) ? iframeOrIds : [iframeOrIds];
+    static async connect(targets: string | HTMLIFrameElement | Window | (string | HTMLIFrameElement | Window)[], timeout = 10000): Promise<void> {
+        const allTargets = Array.isArray(targets) ? targets : [targets];
 
-        MessageBridge.log('connect', 'Attempting to connect to iframes', targets.map(t => typeof t === 'string' ? t : t.id));
+        MessageBridge.log('connect', 'Attempting to connect to targets', allTargets);
 
         await Promise.all(
-            targets.map((target) => IframeManager.connect(target, timeout))
+            allTargets.map((target) => {
+                if (typeof target === 'string' || target instanceof HTMLIFrameElement) {
+                    return IframeManager.connect(target, timeout);
+                } else if (typeof Window !== 'undefined' && target instanceof Window && !target.closed) {
+                    return WindowManager.connect(target, timeout);
+                } else {
+                    return Promise.reject(new Error('Invalid target type'));
+                }
+            })
         );
 
-        MessageBridge.log('connect', 'All iframes connected successfully');
+        MessageBridge.log('connect', 'All targets connected successfully');
     }
 
     static toChild(iframeOrId: string | HTMLIFrameElement) {
         const iframeId = typeof iframeOrId === 'string' ? iframeOrId : iframeOrId.id;
+        const connectFn = () => IframeManager.connect(iframeOrId);
+        const postMessageFn = (msg: string) => IframeManager.postMessage(iframeId, msg);
+        return MessageBridge.createBridge(postMessageFn, connectFn);
+    }
 
+    static toParent(targetWindow: Window = window.parent) {
+        const postMessageFn = (msg: string) => targetWindow.postMessage(msg, '*');
+        return MessageBridge.createBridge(postMessageFn);
+    }
+
+    static toWindow(targetWindow: Window) {
+        const connectFn = () => WindowManager.connect(targetWindow);
+        const postMessageFn = (msg: string) => targetWindow.postMessage(msg, '*');
+        return MessageBridge.createBridge(postMessageFn, connectFn);
+    }
+
+    private static createBridge(postMessageFn: (msg: string) => void, connectFn?: () => Promise<void>) {
         return {
             async sendRequest<T = unknown>(action: string, payload?: any, timeout = 10000): Promise<T> {
                 const uid = Math.random().toString(36).slice(2);
-                const message: MessageRequest = { uid, type: 'request', action, payload, mode: 'promise' };
-                MessageBridge.log('Child sendRequest', 'message', message);
+                const message: MessageRequest = { uid, type: 'request', mode: 'promise', action, payload };
+                MessageBridge.log('sendRequest', message);
 
-                await IframeManager.connect(iframeOrId);
+                if (connectFn) await connectFn();
 
                 return new Promise<T>((resolve, reject) => {
                     const timer = setTimeout(() => {
@@ -103,7 +122,7 @@ export class MessageBridge {
                         resolve(data);
                     });
 
-                    IframeManager.postMessage(iframeId, JSON.stringify(message));
+                    postMessageFn(JSON.stringify(message));
                 });
             },
 
@@ -116,7 +135,9 @@ export class MessageBridge {
                     action,
                     payload,
                 };
-                MessageBridge.log('Child sendObservable', 'message', message);
+
+                MessageBridge.log('sendObservable', message);
+
                 return new Observable<T>((observer) => {
                     MessageBridge.responseListeners.set(uid, (data) => {
                         if (data?.done) {
@@ -127,18 +148,14 @@ export class MessageBridge {
                         }
                     });
 
-                    IframeManager.connect(iframeOrId)
-                        .then(() => IframeManager.postMessage(iframeId, JSON.stringify(message)))
-                        .catch((e) => observer.error(e));
+                    const doPost = () => postMessageFn(JSON.stringify(message));
+                    connectFn ? connectFn().then(doPost).catch(observer.error) : doPost();
 
-                    return () => {
-                        MessageBridge.responseListeners.delete(uid);
-                    };
+                    return () => MessageBridge.responseListeners.delete(uid);
                 });
             },
 
             listenFor<T = any>(action: string): Observable<{ request: MessageRequest; source: Window }> {
-                MessageBridge.log('Child listenFor', 'action', action);
                 return new Observable((observer) => {
                     const sub = MessageBridge.onMessages().subscribe((event) => {
                         try {
@@ -146,24 +163,20 @@ export class MessageBridge {
                             if (message.type === 'request' && message.action === action) {
                                 observer.next({ request: message, source: event.source as Window });
                             }
-                        } catch {
-                            // Ignore
-                        }
+                        } catch { /* ignore */ }
                     });
-
                     return () => sub.unsubscribe();
                 });
             },
 
             respond<T>(uid: string, payload: T, done = true) {
                 const response: MessageResponse<T> = { uid, type: 'response', payload, done };
-                MessageBridge.log('Child respond', 'response', response);
-                window.parent.postMessage(JSON.stringify(response), '*');
+                postMessageFn(JSON.stringify(response));
             },
 
             onResponse(): Observable<MessageEvent> {
                 return MessageBridge.onMessages();
-            },
+            }
         };
     }
 
@@ -204,7 +217,7 @@ export class MessageBridge {
         const uid = Math.random().toString(36).slice(2);
         const message: MessageRequest = { uid, type: 'request', mode: 'observable', action, payload };
         const iframeIds = IframeManager.getAllIframeIds();
-        MessageBridge.log('broadcastObservable', 'message', message);
+        MessageBridge.log('Parent broadcastObservable', JSON.stringify(message));
         return new Observable((observer) => {
             iframeIds.forEach((id) => {
                 const localUid = `${uid}_${id}`;
@@ -229,87 +242,12 @@ export class MessageBridge {
         });
     }
 
-    static toParent() {
-        return {
-            sendRequest<T = unknown>(action: string, payload?: any, timeout = 10000): Promise<T> {
-                const uid = Math.random().toString(36).slice(2);
-                const message: MessageRequest = { uid, type: 'request', mode: 'promise', action, payload };
-                MessageBridge.log('Parent sendRequest', 'message', message);
-                return new Promise<T>((resolve, reject) => {
-                    const timer = setTimeout(() => {
-                        MessageBridge.responseListeners.delete(uid);
-                        reject(new Error('Timeout'));
-                    }, timeout);
-
-                    MessageBridge.responseListeners.set(uid, (data) => {
-                        clearTimeout(timer);
-                        resolve(data);
-                    });
-
-                    window.parent.postMessage(JSON.stringify(message), '*');
-                });
-            },
-
-            sendObservable<T = unknown>(action: string, payload?: any): Observable<T> {
-                const uid = Math.random().toString(36).slice(2);
-                const message: MessageRequest = {
-                    uid,
-                    type: 'request',
-                    mode: 'observable',
-                    action,
-                    payload,
-                };
-                MessageBridge.log('Parent sendObservable', 'message', message);
-                return new Observable<T>((observer) => {
-                    MessageBridge.responseListeners.set(uid, (data) => {
-                        if (data?.done) {
-                            observer.complete();
-                            MessageBridge.responseListeners.delete(uid);
-                        } else {
-                            observer.next(data);
-                        }
-                    });
-
-                    window.parent.postMessage(JSON.stringify(message), '*');
-
-                    return () => {
-                        MessageBridge.responseListeners.delete(uid);
-                    };
-                });
-            },
-
-            listenFor<T = any>(action: string): Observable<{ request: MessageRequest; source: Window }> {
-                MessageBridge.log('Parent listenFor', 'action', action);
-                return new Observable((observer) => {
-                    const sub = MessageBridge.onMessages().subscribe((event) => {
-                        try {
-                            const message: MessageRequest = JSON.parse(event.data);
-                            if (message.type === 'request' && message.action === action) {
-                                observer.next({ request: message, source: event.source as Window });
-                            }
-                        } catch {
-                            // Ignore
-                        }
-                    });
-
-                    return () => sub.unsubscribe();
-                });
-            },
-
-            respond<T>(uid: string, payload: T, done = true) {
-                const response: MessageResponse<T> = { uid, type: 'response', payload, done };
-                MessageBridge.log('Parent respond', 'response', response);
-                window?.top?.postMessage(JSON.stringify(response), '*');
-            },
-        };
-    }
-
     private static onMessages(): Observable<MessageEvent> {
         return this.messageSubject.asObservable();
     }
 
-    private static log(method:string, message: string, ...args: any[]) {
-        if (!MessageBridge.debug) return;
-        console.log(`[MessageBridge ${MessageBridge.identifier} - ${method}]: ${message}`, ...args);
+    private static log(context: string, ...args: any[]) {
+        if (!this.debug) return;
+        console.log(`[MessageBridge - ${this.identifier}] ${context}:`, ...args);
     }
 }

@@ -1,13 +1,13 @@
 # MessageBridge
 
-**MessageBridge** is a minimal, type-safe utility to enable communication between a parent window and one or more `<iframe>` elements using the `postMessage` API. It supports both **promise-based requests** and **observable event streams**, with optional support for broadcasting from parent to all iframes.
+**MessageBridge** is a minimal, type-safe utility to enable communication between a parent window and `<iframe>` elements or opened `windows` using the `postMessage` API. It supports both **promise-based requests** and **observable event streams**, with optional support for broadcasting from parent to all iframes.
 
 ---
 
 ## Features
 
 * Promise and observable request/response messaging
-* Bidirectional: Parent ↔ Iframe
+* Bidirectional: Parent ↔ Iframe and Parent ↔ window.open
 * Auto-handshake on iframe connect
 * Supports broadcast messaging (parent to all children)
 
@@ -61,6 +61,18 @@ MessageBridge.toChild(iframe).sendObservable('height').subscribe({
 });
 ```
 
+#### Listen for requests *from* windows
+
+```ts
+const windowInstance = window.open('https://example.com');
+MessageBridge.toWindow(windowInstance).listenFor('ping').subscribe(({ request }) => {
+  // opt. send a response back to the window
+  MessageBridge.toWindow(windowInstance).respond(request.uid, { pong: true });
+  // you can also pass the request to another iframe
+  MessageBridge.toChild(iframe).sendRequest({request});
+});
+```
+
 #### Listen for requests *from* iframe
 
 ```ts
@@ -86,7 +98,7 @@ MessageBridge.connect([iframe1, iframe2]).then(() => {
 
 ---
 
-### 3. In the **iframe(s)**
+### 3. In the **iframe(s) or window objects**
 
 #### Send request to parent
 

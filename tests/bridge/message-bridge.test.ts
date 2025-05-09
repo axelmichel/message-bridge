@@ -1,6 +1,18 @@
 import { describe, it, beforeEach, expect, vi } from 'vitest';
 import { MessageBridge, IframeManager } from '../../src';
 
+const mockWindowMap = new Map<string, Window>();
+
+vi.mock('../../src/bridge/window-manager', () => ({
+    WindowManager: {
+        connect: vi.fn(() => Promise.resolve()),
+        register: vi.fn((name: string, win: Window) => mockWindowMap.set(name, win)),
+        postMessage: vi.fn((name: string, message: any) => {
+            const win = mockWindowMap.get(name);
+            win?.postMessage(message, '*');
+        }),
+    },
+}));
 
 describe('MessageBridge', () => {
     let postMessageSpy: ReturnType<typeof vi.fn>;
@@ -17,6 +29,7 @@ describe('MessageBridge', () => {
             });
             window.dispatchEvent(event);
         });
+
 
         MessageBridge.init();
     });
@@ -137,4 +150,90 @@ describe('MessageBridge', () => {
 
         expect(values).toEqual(ticks);
     }, 10000);
+
+    it('should send and receive message using toWindow (window.open)', async () => {
+        const mockWindow = {
+            postMessage: vi.fn((msg: string) => {
+                // simulate response
+                const parsed = JSON.parse(msg);
+                if (parsed.type === 'request') {
+                    const response = {
+                        uid: parsed.uid,
+                        type: 'response',
+                        payload: { reply: 'hi' },
+                    };
+                    // simulate receiving the message
+                    setTimeout(() => {
+                        window.dispatchEvent(new MessageEvent('message', {
+                            data: JSON.stringify(response),
+                            origin: 'http://localhost',
+                            source: mockWindow,
+                        }));
+                    }, 10);
+                }
+            }),
+        } as unknown as Window;
+
+        mockWindowMap.set('popup-1', mockWindow);
+
+        MessageBridge.init(); // in case not already initialized
+
+        const result = await MessageBridge.toWindow(mockWindow).sendRequest('hello');
+        expect(result).toEqual({ reply: 'hi' });
+    });
+
+    it('should broadcast a request to multiple iframes', async () => {
+        const iframeIds = ['iframe1','iframe2'];
+        vi.spyOn(IframeManager, 'getAllIframeIds').mockReturnValue(iframeIds);
+
+        MessageBridge.toParent().listenFor('ping').subscribe(({ request, source }) => {
+            MessageBridge.toParent().respond(request.uid, { pong: true });
+        });
+
+
+        const result = await MessageBridge.broadcastRequest('ping', {});
+        expect(result).toEqual({"iframe1": {"pong": true}, "iframe2": {"pong": true}});
+    });
+
+    it('should broadcast observable messages to multiple iframes', async () => {
+        const iframeIds = ['iframe1', 'iframe2'];
+        vi.spyOn(IframeManager, 'getAllIframeIds').mockReturnValue(iframeIds);
+
+        const values: { iframeId: string; value: string }[] = [];
+        const sub = MessageBridge.broadcastObservable<string>('stream').subscribe((msg) => values.push(msg));
+
+        iframeIds.forEach((id) => {
+            const uid = Array.from(MessageBridge['responseListeners'].keys()).find((key) => key.includes(id)) ?? `${id}_uid`;
+            const response = {
+                uid,
+                type: 'response',
+                payload: `tick-${id}`,
+                done: false,
+            };
+            setTimeout(() => window.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(response), source: window })), 10);
+        });
+
+        await new Promise((res) => setTimeout(res, 20));
+        sub.unsubscribe();
+
+        expect(values).toContainEqual({ iframeId: 'iframe1', value: 'tick-iframe1' });
+        expect(values).toContainEqual({ iframeId: 'iframe2', value: 'tick-iframe2' });
+    });
+
+
+    it('should connect to multiple iframes', async () => {
+        const iframe = document.createElement('iframe');
+        const iframe2 = document.createElement('iframe');
+        iframe.id = 'frame1';
+        iframe2.id = 'frame2';
+        document.body.appendChild(iframe);
+        document.body.appendChild(iframe2);
+
+        const connectSpyIframe = vi.spyOn(IframeManager, 'connect').mockResolvedValue();
+
+        await MessageBridge.connect([iframe, iframe2]);
+
+        expect(connectSpyIframe).toHaveBeenCalledWith(iframe, expect.any(Number));
+        expect(connectSpyIframe).toHaveBeenCalledWith(iframe2, expect.any(Number));
+    });
 });
