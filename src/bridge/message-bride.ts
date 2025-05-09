@@ -1,4 +1,5 @@
 import { Observable, Subject } from 'rxjs';
+import { Observer } from 'rxjs/internal/types';
 import { IframeManager } from './iframe-manager';
 import { WindowManager } from "./window-manager";
 
@@ -29,39 +30,41 @@ export class MessageBridge {
     private static identifier = 'message-bridge';
 
     static init(config: MessageBridgeConfig = {}): void {
-        if ((window as any).__messageBridgeInitialized) return;
-        (window as any).__messageBridgeInitialized = true;
+        if (typeof window !== 'undefined') {
+            if ((window as any).__messageBridgeInitialized) return;
+            (window as any).__messageBridgeInitialized = true;
 
-        const { bridgeIdentifier = 'message-bridge', debug = false } = config;
+            const {bridgeIdentifier = 'message-bridge', debug = false} = config;
 
-        MessageBridge.identifier = window.location === top?.location
-            ? `parent-${bridgeIdentifier}` : `child-${bridgeIdentifier}`;
-        MessageBridge.debug = debug;
+            MessageBridge.identifier = window.location === top?.location
+                ? `parent-${bridgeIdentifier}` : `child-${bridgeIdentifier}`;
+            MessageBridge.debug = debug;
 
-        window.addEventListener('message', (event) => {
-            if (typeof event.data !== 'string') return;
+            window.addEventListener('message', (event) => {
+                if (typeof event.data !== 'string') return;
 
-            try {
-                const message = JSON.parse(event.data);
-                MessageBridge.log('Received message', message);
+                try {
+                    const message = JSON.parse(event.data);
+                    MessageBridge.log('Received message', message);
 
-                if (message.type === 'response' && MessageBridge.responseListeners.has(message.uid)) {
-                    const listener = MessageBridge.responseListeners.get(message.uid);
-                    listener?.(message.payload);
-                    if (message.done !== false) {
-                        MessageBridge.responseListeners.delete(message.uid);
+                    if (message.type === 'response' && MessageBridge.responseListeners.has(message.uid)) {
+                        const listener = MessageBridge.responseListeners.get(message.uid);
+                        listener?.(message.payload);
+                        if (message.done !== false) {
+                            MessageBridge.responseListeners.delete(message.uid);
+                        }
+                    } else if (message.type === 'request') {
+                        MessageBridge.messageSubject.next(event);
+                    } else if (message.type === 'handshake-request') {
+                        const iframeId = (window as any).name || 'unknown-iframe';
+                        const sourceWindow = event.source as Window;
+                        sourceWindow.postMessage(JSON.stringify({type: 'handshake', iframeId}), '*');
                     }
-                } else if (message.type === 'request') {
-                    MessageBridge.messageSubject.next(event);
-                } else if (message.type === 'handshake-request') {
-                    const iframeId = (window as any).name || 'unknown-iframe';
-                    const sourceWindow = event.source as Window;
-                    sourceWindow.postMessage(JSON.stringify({ type: 'handshake', iframeId }), '*');
+                } catch {
+                    MessageBridge.log('Invalid JSON', event.data);
                 }
-            } catch {
-                MessageBridge.log('Invalid JSON', event.data);
-            }
-        });
+            });
+        }
     }
 
     static async connect(targets: string | HTMLIFrameElement | Window | (string | HTMLIFrameElement | Window)[], timeout = 10000): Promise<void> {
@@ -138,7 +141,7 @@ export class MessageBridge {
 
                 MessageBridge.log('sendObservable', message);
 
-                return new Observable<T>((observer) => {
+                return new Observable<T>((observer: Observer<T>)  => {
                     MessageBridge.responseListeners.set(uid, (data) => {
                         if (data?.done) {
                             observer.complete();
@@ -156,7 +159,7 @@ export class MessageBridge {
             },
 
             listenFor<T = any>(action: string): Observable<{ request: MessageRequest; source: Window }> {
-                return new Observable((observer) => {
+                return new Observable((observer: Observer<{ request: MessageRequest; source: Window }>) => {
                     const sub = MessageBridge.onMessages().subscribe((event) => {
                         try {
                             const message: MessageRequest = JSON.parse(event.data);
@@ -218,7 +221,7 @@ export class MessageBridge {
         const message: MessageRequest = { uid, type: 'request', mode: 'observable', action, payload };
         const iframeIds = IframeManager.getAllIframeIds();
         MessageBridge.log('Parent broadcastObservable', JSON.stringify(message));
-        return new Observable((observer) => {
+        return new Observable((observer: Observer<{ iframeId: string; value: T }>) => {
             iframeIds.forEach((id) => {
                 const localUid = `${uid}_${id}`;
                 const localMessage = { ...message, uid: localUid };
