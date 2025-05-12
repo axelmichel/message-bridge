@@ -172,6 +172,32 @@ export class MessageBridge {
                 });
             },
 
+            reactTo<T = any, R = any>(
+                action: string,
+                handler: (payload: T) => R | Promise<R>
+                ): void {
+                    const sub = MessageBridge.onMessages().subscribe((event) => {
+                    try {
+                        const message: MessageRequest = JSON.parse(event.data);
+                        if (message.type === 'request' && message.action === action) {
+                            const result = handler(message.payload);
+                            Promise.resolve(result).then((resolved) => {
+                                const response: MessageResponse<R> = {
+                                    uid: message.uid,
+                                    type: 'response',
+                                    payload: resolved,
+                                    done: true,
+                                };
+                                postMessageFn(JSON.stringify(response));
+                            });
+                            sub.unsubscribe(); // auto-cleanup after one call
+                        }
+                    } catch {
+                        // ignore
+                    }
+                });
+            },
+
             respond<T>(uid: string, payload: T, done = true) {
                 const response: MessageResponse<T> = { uid, type: 'response', payload, done };
                 postMessageFn(JSON.stringify(response));
